@@ -2,262 +2,253 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>Grand Prix Turbo - F1 Style</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Grand Prix JS - 3D F1 Racing</title>
     <style>
-        body {
-            margin: 0;
-            padding: 0;
-            background: #222;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            height: 100vh;
-            color: white;
-            font-family: 'Arial', sans-serif;
-            overflow: hidden;
-        }
-        #game-container {
-            position: relative;
-            border: 4px solid #444;
-            box-shadow: 0 0 20px rgba(0,0,0,0.5);
-        }
-        canvas {
-            display: block;
-            background: #333;
-        }
+        body { margin: 0; overflow: hidden; background: #000; font-family: 'Arial', sans-serif; }
+        canvas { display: block; }
+        
+        /* HUD (UI表示) */
         #ui {
             position: absolute;
-            top: 10px;
-            left: 10px;
+            bottom: 20px;
+            right: 20px;
+            color: white;
+            text-align: right;
             pointer-events: none;
         }
-        .stat {
-            font-size: 20px;
-            font-weight: bold;
-            margin-bottom: 5px;
-            text-shadow: 2px 2px 2px black;
-        }
-        #overlay {
+        #speed { font-size: 48px; font-weight: bold; font-style: italic; }
+        #unit { font-size: 18px; margin-left: 5px; }
+        
+        #instructions {
             position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            text-align: center;
-            background: rgba(0,0,0,0.8);
-            padding: 20px;
-            border-radius: 10px;
-        }
-        button {
-            padding: 10px 20px;
-            font-size: 18px;
-            cursor: pointer;
-            background: #e10600; /* F1 Red */
+            top: 20px;
+            left: 20px;
             color: white;
-            border: none;
-            border-radius: 5px;
-            transition: 0.2s;
+            background: rgba(0,0,0,0.5);
+            padding: 15px;
+            border-left: 4px solid #e10600; /* F1 Red */
         }
-        button:hover { background: #ff0800; }
+        .controls { font-weight: bold; color: #ffeb3b; }
     </style>
 </head>
 <body>
 
-<div id="game-container">
-    <canvas id="gameCanvas"></canvas>
-    <div id="ui">
-        <div class="stat">SPEED: <span id="speedDisplay">0</span> km/h</div>
-        <div class="stat">SCORE: <span id="scoreDisplay">0</span></div>
-    </div>
-    <div id="overlay">
-        <h1>GRAND PRIX TURBO</h1>
-        <p>左右キー (← →) で操作</p>
-        <button onclick="startGame()">START RACE</button>
-    </div>
+<div id="instructions">
+    <strong>GRAND PRIX JS</strong><br>
+    <span class="controls">↑ / W</span> : 加速<br>
+    <span class="controls">↓ / S</span> : ブレーキ・後退<br>
+    <span class="controls">← → / A D</span> : ステアリング
 </div>
 
-<script>
-    const canvas = document.getElementById('gameCanvas');
-    const ctx = canvas.getContext('2d');
-    const speedDisplay = document.getElementById('speedDisplay');
-    const scoreDisplay = document.getElementById('scoreDisplay');
-    const overlay = document.getElementById('overlay');
+<div id="ui">
+    <div id="speed">0</div>
+    <div id="unit">KM/H</div>
+</div>
 
-    // キャンバスサイズ設定
-    canvas.width = 400;
-    canvas.height = 600;
+<script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
+        }
+    }
+</script>
 
-    // ゲーム状態
-    let gameActive = false;
-    let score = 0;
+<script type="module">
+    import * as THREE from 'three';
+
+    // --- 設定と変数 ---
+    let scene, camera, renderer, car, clock;
     let speed = 0;
-    let playerX = canvas.width / 2;
-    let trackOffset = 0;
-    let enemies = [];
-    let particles = [];
-    let frameCount = 0;
+    let rotation = 0;
+    const stats = {
+        maxSpeed: 0.8,
+        acceleration: 0.005,
+        deceleration: 0.01,
+        friction: 0.002,
+        steering: 0.03
+    };
 
-    // 定数
-    const MAX_SPEED = 15;
-    const PLAYER_WIDTH = 40;
-    const PLAYER_HEIGHT = 70;
+    const keys = { w: false, s: false, a: false, d: false };
 
-    // キー入力
-    let keys = {};
-    window.addEventListener('keydown', e => keys[e.code] = true);
-    window.addEventListener('keyup', e => keys[e.code] = false);
+    // --- 初期化 ---
+    init();
+    animate();
 
-    function startGame() {
-        gameActive = true;
-        score = 0;
-        speed = 5;
-        playerX = canvas.width / 2;
-        enemies = [];
-        overlay.style.display = 'none';
-        animate();
+    function init() {
+        // シーン
+        scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x87ceeb); // 青空
+        scene.fog = new THREE.Fog(0x87ceeb, 20, 100);
+
+        // カメラ
+        camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+
+        // レンダラー
+        renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        document.body.appendChild(renderer.domElement);
+
+        // 光源
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+
+        const sunLight = new THREE.DirectionalLight(0xffffff, 1);
+        sunLight.position.set(10, 20, 10);
+        sunLight.castShadow = true;
+        scene.add(sunLight);
+
+        // 地面（サーキット）
+        createTrack();
+
+        // マシン (F1)
+        car = createF1Car();
+        scene.add(car);
+
+        clock = new THREE.Clock();
+
+        // イベントリスナー
+        window.addEventListener('keydown', (e) => handleKey(e, true));
+        window.addEventListener('keyup', (e) => handleKey(e, false));
+        window.addEventListener('resize', onWindowResize);
     }
 
-    function createEnemy() {
-        if (frameCount % 60 === 0) {
-            enemies.push({
-                x: Math.random() * (canvas.width - 100) + 50,
-                y: -100,
-                type: Math.random() > 0.8 ? '#00d2be' : '#ff8700' // メルセデス風 or マクラーレン風
-            });
-        }
-    }
+    // --- F1マシンのモデリング ---
+    function createF1Car() {
+        const group = new THREE.Group();
 
-    function drawPlayer(x, y) {
-        // ウイング
-        ctx.fillStyle = '#e10600';
-        ctx.fillRect(x - 20, y + 40, 40, 10); // リア
-        ctx.fillRect(x - 18, y - 5, 36, 5);   // フロント
-        
-        // ボディ
-        ctx.fillStyle = '#111';
-        ctx.fillRect(x - 10, y, 20, 50);
-        
-        // タイヤ
-        ctx.fillStyle = '#000';
-        ctx.fillRect(x - 22, y + 5, 8, 15);  // 前左
-        ctx.fillRect(x + 14, y + 5, 8, 15);  // 前右
-        ctx.fillRect(x - 24, y + 35, 10, 18); // 後左
-        ctx.fillRect(x + 14, y + 35, 10, 18); // 後右
-    }
+        // ボディ（メイン）
+        const bodyGeo = new THREE.BoxGeometry(0.6, 0.3, 2);
+        const bodyMat = new THREE.MeshPhongMaterial({ color: 0xe10600 }); // F1レッド
+        const body = new THREE.Mesh(bodyGeo, bodyMat);
+        body.position.y = 0.2;
+        body.castShadow = true;
+        group.add(body);
 
-    function drawEnemy(e) {
-        ctx.fillStyle = e.type;
-        ctx.fillRect(e.x - 10, e.y, 20, 50);
-        ctx.fillStyle = '#000';
-        ctx.fillRect(e.x - 22, e.y + 5, 8, 15);
-        ctx.fillRect(e.x + 14, e.y + 5, 8, 15);
-    }
+        // ノーズ
+        const noseGeo = new THREE.BoxGeometry(0.3, 0.15, 1);
+        const nose = new THREE.Mesh(noseGeo, bodyMat);
+        nose.position.set(0, 0.15, 1.2);
+        group.add(nose);
 
-    function update() {
-        if (!gameActive) return;
+        // フロントウィング
+        const wingGeo = new THREE.BoxGeometry(1.4, 0.05, 0.3);
+        const wingMat = new THREE.MeshPhongMaterial({ color: 0x222222 });
+        const fWing = new THREE.Mesh(wingGeo, wingMat);
+        fWing.position.set(0, 0.1, 1.6);
+        group.add(fWing);
 
-        // 加速と減速
-        if (speed < MAX_SPEED) speed += 0.01;
-        
-        // 左右移動
-        if (keys['ArrowLeft'] && playerX > 40) playerX -= 5;
-        if (keys['ArrowRight'] && playerX < canvas.width - 40) playerX += 5;
+        // タイヤ (4つ)
+        const wheelGeo = new THREE.CylinderGeometry(0.25, 0.25, 0.2, 32);
+        const wheelMat = new THREE.MeshPhongMaterial({ color: 0x111111 });
+        const positions = [
+            [-0.45, 0.25, 0.8], [0.45, 0.25, 0.8],   // 前輪
+            [-0.5, 0.25, -0.7], [0.5, 0.25, -0.7]    // 後輪
+        ];
 
-        // 道路の端での減速（コースアウト）
-        if (playerX < 80 || playerX > canvas.width - 80) {
-            speed *= 0.98;
-            if (frameCount % 5 === 0) createSmoke(playerX, 550);
-        }
-
-        // 背景ループ
-        trackOffset += speed;
-        if (trackOffset > 100) trackOffset = 0;
-
-        // 敵の管理
-        createEnemy();
-        enemies.forEach((e, index) => {
-            e.y += speed * 0.5; // 相対速度
-            
-            // 衝突判定
-            if (Math.abs(e.x - playerX) < 35 && Math.abs(e.y - 520) < 50) {
-                gameOver();
-            }
-
-            if (e.y > canvas.height) {
-                enemies.splice(index, 1);
-                score += 10;
-            }
+        positions.forEach(pos => {
+            const wheel = new THREE.Mesh(wheelGeo, wheelMat);
+            wheel.rotation.z = Math.PI / 2;
+            wheel.position.set(...pos);
+            group.add(wheel);
         });
 
-        scoreDisplay.innerText = score;
-        speedDisplay.innerText = Math.floor(speed * 20);
-        frameCount++;
+        return group;
     }
 
-    function createSmoke(x, y) {
-        particles.push({x, y, opacity: 1});
-    }
-
-    function draw() {
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-        // グリーン (芝生)
-        ctx.fillStyle = '#2e7d32';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-
+    // --- サーキットの作成 ---
+    function createTrack() {
         // アスファルト
-        ctx.fillStyle = '#444';
-        ctx.fillRect(50, 0, canvas.width - 100, canvas.height);
+        const floorGeo = new THREE.PlaneGeometry(2000, 2000);
+        const floorMat = new THREE.MeshPhongMaterial({ color: 0x333333 });
+        const floor = new THREE.Mesh(floorGeo, floorMat);
+        floor.rotation.x = -Math.PI / 2;
+        floor.receiveShadow = true;
+        scene.add(floor);
 
-        // 白線
-        ctx.strokeStyle = '#fff';
-        ctx.setLineDash([20, 20]);
-        ctx.lineDashOffset = -trackOffset;
-        ctx.beginPath();
-        ctx.moveTo(60, 0); ctx.lineTo(60, canvas.height);
-        ctx.moveTo(canvas.width - 60, 0); ctx.lineTo(canvas.width - 60, canvas.height);
-        ctx.stroke();
+        // グリッド線
+        const grid = new THREE.GridHelper(2000, 100, 0x555555, 0x444444);
+        scene.add(grid);
 
-        // センターライン
-        ctx.beginPath();
-        ctx.moveTo(canvas.width / 2, 0);
-        ctx.lineTo(canvas.width / 2, canvas.height);
-        ctx.stroke();
+        // 縁石（赤白）を並べる
+        for(let i = -100; i < 100; i++) {
+            const kerbGeo = new THREE.BoxGeometry(2, 0.05, 1);
+            const kerbMat = new THREE.MeshPhongMaterial({ color: i % 2 === 0 ? 0xffffff : 0xff0000 });
+            const leftKerb = new THREE.Mesh(kerbGeo, kerbMat);
+            leftKerb.position.set(-8, 0.01, i * 2);
+            scene.add(leftKerb);
 
-        // 敵の描画
-        enemies.forEach(e => drawEnemy(e));
-
-        // プレイヤーの描画
-        drawPlayer(playerX, 520);
-
-        // パーティクル
-        ctx.setLineDash([]);
-        particles.forEach((p, i) => {
-            ctx.fillStyle = `rgba(255,255,255,${p.opacity})`;
-            ctx.beginPath();
-            ctx.arc(p.x, p.y, 5, 0, Math.PI*2);
-            ctx.fill();
-            p.opacity -= 0.05;
-            if (p.opacity <= 0) particles.splice(i, 1);
-        });
+            const rightKerb = leftKerb.clone();
+            rightKerb.position.x = 8;
+            scene.add(rightKerb);
+        }
     }
 
-    function gameOver() {
-        gameActive = false;
-        overlay.style.display = 'block';
-        overlay.innerHTML = `<h1>RETIRED</h1><p>SCORE: ${score}</p><button onclick="startGame()">RETRY</button>`;
+    // --- ループ処理 ---
+    function handleKey(e, isDown) {
+        const key = e.key.toLowerCase();
+        if (key === 'arrowup' || key === 'w') keys.w = isDown;
+        if (key === 'arrowdown' || key === 's') keys.s = isDown;
+        if (key === 'arrowleft' || key === 'a') keys.a = isDown;
+        if (key === 'arrowright' || key === 'd') keys.d = isDown;
+    }
+
+    function updatePhysics() {
+        // 加速と減速
+        if (keys.w) {
+            speed += stats.acceleration;
+        } else if (keys.s) {
+            speed -= stats.deceleration;
+        } else {
+            // 摩擦
+            if (speed > 0) speed -= stats.friction;
+            if (speed < 0) speed += stats.friction;
+            if (Math.abs(speed) < 0.001) speed = 0;
+        }
+
+        // 速度制限
+        speed = Math.max(-stats.maxSpeed / 2, Math.min(speed, stats.maxSpeed));
+
+        // ステアリング (速度が出ているときだけ曲がる)
+        if (Math.abs(speed) > 0.01) {
+            const steerDir = speed > 0 ? 1 : -1;
+            if (keys.a) rotation += stats.steering * steerDir;
+            if (keys.d) rotation -= stats.steering * steerDir;
+        }
+
+        // 位置の更新
+        car.position.x += Math.sin(rotation) * speed;
+        car.position.z += Math.cos(rotation) * speed;
+        car.rotation.y = rotation;
+
+        // UI更新
+        document.getElementById('speed').innerText = Math.floor(Math.abs(speed) * 400);
+    }
+
+    function updateCamera() {
+        // 車の後方にカメラを配置
+        const offset = new THREE.Vector3(
+            -Math.sin(rotation) * 5,
+            2,
+            -Math.cos(rotation) * 5
+        );
+        camera.position.lerp(car.position.clone().add(offset), 0.1);
+        camera.lookAt(car.position);
     }
 
     function animate() {
-        if (!gameActive) return;
-        update();
-        draw();
         requestAnimationFrame(animate);
+        updatePhysics();
+        updateCamera();
+        renderer.render(scene, camera);
     }
 
-    // 初期背景だけ描画
-    draw();
+    function onWindowResize() {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    }
 </script>
-
 </body>
 </html>
