@@ -2,125 +2,120 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>Retro 3D Racer</title>
+    <title>Retro Circuit Racer</title>
     <style>
         body {
             margin: 0;
             padding: 0;
             background: #222;
             display: flex;
-            justify-content: center;
+            flex-direction: column;
             align-items: center;
+            justify-content: center;
             height: 100vh;
+            color: white;
+            font-family: sans-serif;
             overflow: hidden;
-            font-family: 'Courier New', Courier, monospace;
         }
-        #gameCanvas {
-            background: #000;
+        canvas {
             border: 4px solid #444;
             box-shadow: 0 0 20px rgba(0,0,0,0.5);
+            background: #7290ff; /* 空の色 */
         }
         .ui {
             position: absolute;
             top: 20px;
             left: 20px;
-            color: #fff;
-            text-shadow: 2px 2px #000;
-            pointer-events: none;
+            background: rgba(0,0,0,0.7);
+            padding: 10px;
+            border-radius: 5px;
         }
     </style>
 </head>
 <body>
 
     <div class="ui">
-        <h2 id="speed">Speed: 0 km/h</h2>
-        <h2 id="lap">Lap: 0 / 3</h2>
-        <p>Arrows or WASD to Drive</p>
+        Speed: <span id="speedOut">0</span> km/h<br>
+        Lap: <span id="lapOut">0</span>
     </div>
     <canvas id="gameCanvas"></canvas>
 
     <script>
         const canvas = document.getElementById('gameCanvas');
         const ctx = canvas.getContext('2d');
-        const speedElement = document.getElementById('speed');
-        const lapElement = document.getElementById('lap');
+        const speedOut = document.getElementById('speedOut');
+        const lapOut = document.getElementById('lapOut');
 
-        // --- 設定 ---
-        const width = 800;
-        const height = 600;
-        canvas.width = width;
-        canvas.height = height;
+        // 画面設定
+        canvas.width = 640;
+        canvas.height = 480;
 
-        const roadWidth = 2000;
-        const segmentLength = 200;
-        const rumbleLength = 3;
-        const lanes = 3;
-        const fieldOfView = 100;
-        const cameraHeight = 1000;
-        const drawDistance = 300;
-        const fogDensity = 5;
+        // 定数
+        const ROAD_WIDTH = 2000;
+        const SEGMENT_LENGTH = 200;
+        const RUMBLE_LENGTH = 3;
+        const LANES = 3;
+        const FOV = 100; // 視野角
+        const CAMERA_HEIGHT = 1000;
+        const DRAW_DISTANCE = 300; // 描画セグメント数
 
-        let playerX = 0; // -1 to 1
+        // ゲーム状態
+        let playerX = 0;
         let position = 0;
         let speed = 0;
-        const maxSpeed = segmentLength * 60; // 60fps
+        const maxSpeed = SEGMENT_LENGTH * 60;
         const accel = maxSpeed / 5;
-        const breaking = -maxSpeed / 2;
-        const decel = -maxSpeed / 10;
+        const breaking = -maxSpeed;
+        const decel = -maxSpeed / 5;
         const offRoadDecel = -maxSpeed / 2;
         const offRoadLimit = maxSpeed / 4;
 
+        let keys = {};
         let segments = [];
         let trackLength = 0;
 
-        // --- 入力管理 ---
-        const keys = { up: false, down: false, left: false, right: false };
-        document.addEventListener('keydown', e => keyHandler(e, true));
-        document.addEventListener('keyup', e => keyHandler(e, false));
-
-        function keyHandler(e, value) {
-            switch(e.key.toLowerCase()) {
-                case 'arrowup': case 'w': keys.up = value; break;
-                case 'arrowdown': case 's': keys.down = value; break;
-                case 'arrowleft': case 'a': keys.left = value; break;
-                case 'arrowright': case 'd': keys.right = value; break;
-            }
-        }
-
-        // --- コース生成 ---
+        // コース生成ヘルパー
         function addSegment(curve, y) {
             segments.push({
                 index: segments.length,
-                p1: { world: { y: lastY(), z: segments.length * segmentLength }, screen: {} },
-                p2: { world: { y: y, z: (segments.length + 1) * segmentLength }, screen: {} },
+                p1: { world: { y: lastY(), z: segments.length * SEGMENT_LENGTH }, screen: {} },
+                p2: { world: { y: y, z: (segments.length + 1) * SEGMENT_LENGTH }, screen: {} },
                 curve: curve,
-                color: Math.floor(segments.length / rumbleLength) % 2 ? 
-                    { road: '#333', grass: '#106310', rumble: '#777', lane: '#ccc' } : 
-                    { road: '#383838', grass: '#005108', rumble: '#fff', lane: '#383838' }
+                color: Math.floor(segments.length / RUMBLE_LENGTH) % 2 ? 
+                       { road: '#444', grass: '#106310', rumble: '#777' } : 
+                       { road: '#4a4a4a', grass: '#0d520d', rumble: '#999' }
             });
         }
 
         function lastY() { return segments.length === 0 ? 0 : segments[segments.length - 1].p2.world.y; }
 
-        function buildTrack() {
-            // 直線
-            for(let i=0; i<100; i++) addSegment(0, 0);
-            // 緩やかな右カーブ
-            for(let i=0; i<100; i++) addSegment(2, i * 2);
-            // 坂道と左カーブ
-            for(let i=0; i<100; i++) addSegment(-3, 200 + (Math.sin(i/10)*500));
-            // 直線
-            for(let i=0; i<200; i++) addSegment(0, 0);
-            
-            trackLength = segments.length * segmentLength;
+        function addRoad(enter, hold, leave, curve, y) {
+            for (let n = 0; n < enter; n++) addSegment(easeIn(0, curve, n / enter), easeIn(lastY(), y, n / enter));
+            for (let n = 0; n < hold; n++) addSegment(curve, y);
+            for (let n = 0; n < leave; n++) addSegment(easeInOut(curve, 0, n / leave), easeInOut(y, lastY(), n / leave));
         }
 
-        // --- 数学補助 ---
+        const easeIn = (a, b, percent) => a + (b - a) * Math.pow(percent, 2);
+        const easeInOut = (a, b, percent) => a + (b - a) * ((-Math.cos(percent * Math.PI) / 2) + 0.5);
+
+        // コースの作成（S字や直線）
+        function resetTrack() {
+            segments = [];
+            addRoad(50, 50, 50, 0, 0); // スタート直線
+            addRoad(100, 100, 100, 3, 500); // 右カーブ・登り
+            addRoad(100, 100, 100, -3, -500); // 左カーブ・下り
+            addRoad(50, 50, 50, 0, 0); // 直線
+            addRoad(100, 50, 100, 5, 200); // 急な右
+            addRoad(100, 50, 100, -2, 0); // 緩やかな左
+            trackLength = segments.length * SEGMENT_LENGTH;
+        }
+
+        // 3D座標を2Dスクリーン座標に投影
         function project(p, cameraX, cameraY, cameraZ, cameraDepth) {
             p.screen.scale = cameraDepth / (p.world.z - cameraZ);
-            p.screen.x = Math.round((width / 2) + (p.screen.scale * (p.world.x - cameraX) * width / 2));
-            p.screen.y = Math.round((height / 2) - (p.screen.scale * (p.world.y - cameraY) * height / 2));
-            p.screen.w = Math.round(p.screen.scale * roadWidth * width / 2);
+            p.screen.x = Math.round((canvas.width / 2) + (p.screen.scale * (p.world.x - cameraX) * canvas.width / 2));
+            p.screen.y = Math.round((canvas.height / 2) - (p.screen.scale * (p.world.y - cameraY) * canvas.height / 2));
+            p.screen.w = Math.round(p.screen.scale * ROAD_WIDTH * canvas.width / 2);
         }
 
         function drawPolygon(x1, y1, w1, x2, y2, w2, color) {
@@ -134,110 +129,109 @@
             ctx.fill();
         }
 
-        // --- メインループ ---
+        // メインループ
         function update(dt) {
-            // 加減速
-            if (keys.up) speed += accel * dt;
-            else if (keys.down) speed += breaking * dt;
-            else speed += decel * dt;
+            // 入力処理
+            const playerSegment = segments[Math.floor(position / SEGMENT_LENGTH) % segments.length];
+            const speedPercent = speed / maxSpeed;
 
-            // オフロード判定
-            if (((playerX < -1) || (playerX > 1)) && (speed > offRoadLimit))
-                speed += offRoadDecel * dt;
+            if (keys[38] || keys[87]) speed = speed + accel * dt;
+            else if (keys[40] || keys[83]) speed = speed + breaking * dt;
+            else speed = speed + decel * dt;
 
-            speed = Math.max(0, Math.min(speed, maxSpeed));
-            position += speed * dt;
-            while (position >= trackLength) position -= trackLength;
-            while (position < 0) position += trackLength;
+            // オフロード判定（ダート：緑色部分）
+            if (((playerX < -1) || (playerX > 1)) && (speed > offRoadLimit)) {
+                speed = speed + offRoadDecel * dt;
+            }
 
-            // ハンドル操作
-            const dx = dt * 2 * (speed / maxSpeed);
-            if (keys.left) playerX -= dx;
-            if (keys.right) playerX += dx;
+            // ステアリング
+            if (keys[37] || keys[65]) playerX = playerX - (2 * dt * speedPercent);
+            else if (keys[39] || keys[68]) playerX = playerX + (2 * dt * speedPercent);
 
             // カーブによる遠心力
-            const startSeg = Math.floor(position / segmentLength) % segments.length;
-            playerX -= dx * (speed / maxSpeed) * segments[startSeg].curve * 0.5;
-            playerX = Math.max(-2, Math.min(2, playerX));
+            playerX = playerX - (speedPercent * playerSegment.curve * 0.015);
+
+            speed = Math.max(0, Math.min(speed, maxSpeed));
+            position = (position + speed * dt) % trackLength;
 
             // UI更新
-            speedElement.innerText = `Speed: ${Math.round(speed / 100)} km/h`;
-            lapElement.innerText = `Lap: ${Math.floor(position / trackLength) + 1} / 3`;
+            speedOut.innerText = Math.round(speed / 100);
+            lapOut.innerText = Math.floor(position / trackLength);
         }
 
-        function draw() {
-            ctx.clearRect(0, 0, width, height);
+        function render() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-            // 背景（空と地面の境目）
-            ctx.fillStyle = '#72D1F6';
-            ctx.fillRect(0, 0, width, height / 2);
+            // 背景（空と遠くの山的なもの）
+            ctx.fillStyle = '#7290ff';
+            ctx.fillRect(0, 0, canvas.width, canvas.height / 2);
             ctx.fillStyle = '#106310';
-            ctx.fillRect(0, height / 2, width, height / 2);
+            ctx.fillRect(0, canvas.height / 2, canvas.width, canvas.height / 2);
 
-            const baseSegment = segments[Math.floor(position / segmentLength) % segments.length];
-            const basePercent = (position % segmentLength) / segmentLength;
-            const cameraZ = position;
-            const cameraX = playerX * roadWidth;
-            const cameraDepth = 1 / Math.tan((fieldOfView / 2) * Math.PI / 180);
+            const baseSegment = segments[Math.floor(position / SEGMENT_LENGTH) % segments.length];
+            const basePercent = (position % SEGMENT_LENGTH) / SEGMENT_LENGTH;
+            const cameraHeight = lastY() + CAMERA_HEIGHT; // 簡易的な高さ追従
             
-            let maxy = height;
             let x = 0;
             let dx = -(baseSegment.curve * basePercent);
 
-            // 道路のレンダリング
-            for (let i = 0; i < drawDistance; i++) {
-                const segment = segments[(baseSegment.index + i) % segments.length];
+            const cameraDepth = 1 / Math.tan((FOV / 2) * Math.PI / 180);
+
+            for (let n = 0; n < DRAW_DISTANCE; n++) {
+                const segment = segments[(baseSegment.index + n) % segments.length];
                 const looped = segment.index < baseSegment.index;
                 
-                project(segment.p1, cameraX - x, cameraHeight, cameraZ - (looped ? trackLength : 0), cameraDepth);
-                project(segment.p2, cameraX - x - dx, cameraHeight, cameraZ - (looped ? trackLength : 0), cameraDepth);
-                
+                project(segment.p1, playerX * ROAD_WIDTH, CAMERA_HEIGHT + baseSegment.p1.world.y, position - (looped ? trackLength : 0), cameraDepth);
+                project(segment.p2, playerX * ROAD_WIDTH - x, CAMERA_HEIGHT + baseSegment.p1.world.y, position - (looped ? trackLength : 0), cameraDepth);
+
                 x += dx;
                 dx += segment.curve;
 
-                if (segment.p1.screen.z <= cameraDepth || segment.p2.screen.y >= maxy) continue;
+                if (segment.p1.screen.scale <= 0) continue;
 
                 const p1 = segment.p1.screen;
                 const p2 = segment.p2.screen;
 
-                // 草原
-                drawPolygon(0, p1.y, width, 0, p2.y, width, segment.color.grass);
-                // 路肩
-                drawPolygon(p1.x, p1.y, p1.w * 1.1, p2.x, p2.y, p2.w * 1.1, segment.color.rumble);
-                // 道路
-                drawPolygon(p1.x, p1.y, p1.w, p2.x, p2.y, p2.w, segment.color.road);
+                // 草原(ダート)
+                ctx.fillStyle = segment.color.grass;
+                ctx.fillRect(0, p2.y, canvas.width, p1.y - p2.y);
 
-                // 白線
-                if (segment.color.lane !== segment.color.road) {
-                    const lineW1 = p1.w / 20;
-                    const lineW2 = p2.w / 20;
-                    drawPolygon(p1.x, p1.y, lineW1, p2.x, p2.y, lineW2, segment.color.lane);
-                }
+                // 縁石(ランブル)
+                const r1 = p1.w * 0.1;
+                const r2 = p2.w * 0.1;
+                drawPolygon(p1.x, p1.y, p1.w + r1, p2.x, p2.y, p2.w + r2, segment.color.rumble);
                 
-                maxy = p2.y;
+                // コース(道路)
+                drawPolygon(p1.x, p1.y, p1.w, p2.x, p2.y, p2.w, segment.color.road);
             }
 
-            // 自車（簡易的な矩形描写）
-            ctx.fillStyle = '#f00';
-            const carW = 80;
-            const carH = 40;
-            ctx.fillRect(width/2 - carW/2, height - carH - 20, carW, carH);
-            ctx.fillStyle = '#000';
-            ctx.fillRect(width/2 - carW/2 + 10, height - carH - 10, 15, 15); // タイヤ
-            ctx.fillRect(width/2 + carW/2 - 25, height - carH - 10, 15, 15);
+            // プレイヤー（自車）の描画 - シンプルな矩形
+            const playerW = 80;
+            const playerH = 40;
+            ctx.fillStyle = "red";
+            ctx.fillRect(canvas.width / 2 - playerW / 2, canvas.height - 80, playerW, playerH);
+            ctx.fillStyle = "black"; // タイヤっぽく
+            ctx.fillRect(canvas.width / 2 - playerW / 2 - 5, canvas.height - 60, 10, 20);
+            ctx.fillRect(canvas.width / 2 + playerW / 2 - 5, canvas.height - 60, 10, 20);
         }
 
-        let lastTime = performance.now();
+        // ループ制御
+        let lastTime = Date.now();
         function frame() {
-            const now = performance.now();
-            const dt = Math.min(1, (now - lastTime) / 1000);
+            let now = Date.now();
+            let dt = Math.min(1, (now - lastTime) / 1000);
             update(dt);
-            draw();
+            render();
             lastTime = now;
             requestAnimationFrame(frame);
         }
 
-        buildTrack();
+        // イベントリスナー
+        window.addEventListener('keydown', e => keys[e.keyCode] = true);
+        window.addEventListener('keyup', e => keys[e.keyCode] = false);
+
+        // 開始
+        resetTrack();
         frame();
 
     </script>
